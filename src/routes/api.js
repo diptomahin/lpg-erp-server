@@ -14,6 +14,8 @@ import { adjustStock } from "../services/inventoryService.js";
 import { voidPurchase } from "../services/purchaseService.js";
 import { stockAdjustmentInput } from "../validators/index.js";
 import { round } from "../utils/numbers.js";
+import { dateRange } from "../utils/dateRange.js";
+import { env } from "../config/env.js";
 import {
   asyncHandler,
   ok,
@@ -340,15 +342,35 @@ router.get(
     });
   }),
 );
+router.post(
+  "/settings/theoretical-profit",
+  authorize("admin"),
+  asyncHandler(async (req, res) => {
+    if (!env.theoreticalProfitPassword) {
+      return fail(
+        res,
+        "Theoretical profit password is not configured.",
+        [],
+        503,
+      );
+    }
+    if (req.body?.password !== env.theoreticalProfitPassword) {
+      return fail(res, "Incorrect theoretical profit password.", [], 401);
+    }
+    return ok(res, "Theoretical profit setting authorized", {
+      enabled: Boolean(req.body?.enabled),
+    });
+  }),
+);
 const report = (Model, label) =>
   asyncHandler(async (req, res) => {
     const { page, limit } = paginate(req);
     const query = {};
     if (req.query.from || req.query.to)
-      query[Model === Sale ? "saleDate" : "purchaseDate"] = {
-        ...(req.query.from ? { $gte: new Date(req.query.from) } : {}),
-        ...(req.query.to ? { $lte: new Date(req.query.to) } : {}),
-      };
+      query[Model === Sale ? "saleDate" : "purchaseDate"] = dateRange(
+        req.query.from,
+        req.query.to,
+      );
     const [rows, total] = await Promise.all([
       Model.find(query)
         .skip((page - 1) * limit)
@@ -364,11 +386,8 @@ router.get(
     const { page, limit } = paginate(req);
     const query = {};
     if (req.query.from || req.query.to) {
-      const end = req.query.to ? new Date(req.query.to) : null;
-      if (end) end.setHours(23, 59, 59, 999);
       query.saleDate = {
-        ...(req.query.from ? { $gte: new Date(req.query.from) } : {}),
-        ...(end ? { $lte: end } : {}),
+        ...dateRange(req.query.from, req.query.to),
       };
     }
     const [sales, total] = await Promise.all([
@@ -479,10 +498,7 @@ router.get(
     const rows = await Expense.find({
       ...(req.query.from || req.query.to
         ? {
-            expenseDate: {
-              ...(req.query.from ? { $gte: new Date(req.query.from) } : {}),
-              ...(req.query.to ? { $lte: new Date(req.query.to) } : {}),
-            },
+            expenseDate: dateRange(req.query.from, req.query.to),
           }
         : {}),
       status: "active",

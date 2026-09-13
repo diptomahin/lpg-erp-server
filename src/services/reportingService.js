@@ -1,6 +1,7 @@
 import {
   CustomerPayment,
   Customer,
+  CylinderType,
   Expense,
   Purchase,
   PurchaseBatch,
@@ -13,20 +14,10 @@ import {
   ProfitSharePayment,
 } from "../models/index.js";
 import { round } from "../utils/numbers.js";
-
+import { dateRange } from "../utils/dateRange.js";
 const range = (field, from, to) => {
-  const end = to ? new Date(to) : null;
-  if (end) end.setHours(23, 59, 59, 999);
-  return {
-    ...(from || to
-      ? {
-          [field]: {
-            ...(from ? { $gte: new Date(from) } : {}),
-            ...(end ? { $lte: end } : {}),
-          },
-        }
-      : {}),
-  };
+  const boundaries = dateRange(from, to);
+  return Object.keys(boundaries).length ? { [field]: boundaries } : {};
 };
 const sum = (rows, field) =>
   round(
@@ -34,9 +25,72 @@ const sum = (rows, field) =>
     2,
   );
 
+const normalizePaymentMethod = (value) =>
+  String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
+const cylinderBreakdown = (sales, cylinderTypes) => {
+  const names = new Map(
+    cylinderTypes.map((type) => [String(type._id), type.name]),
+  );
+  const totals = new Map();
+
+  for (const sale of sales) {
+    for (const item of sale.items || []) {
+      const key = String(item.cylinderType);
+      const current = totals.get(key) || {
+        name: names.get(key) || `${item.capacityKg || 0} KG cylinder`,
+        quantity: 0,
+        lpgKg: 0,
+      };
+      current.quantity += Number(item.cylinderCount || 0);
+      current.lpgKg += Number(item.totalLpgKg || 0);
+      totals.set(key, current);
+    }
+  }
+
+  return [...totals.values()]
+    .map((item) => ({
+      ...item,
+      quantity: round(item.quantity, 0),
+      lpgKg: round(item.lpgKg, 3),
+    }))
+    .sort((left, right) => right.quantity - left.quantity);
+};
+
+export function summarizeCustomerReceipts(customerPayments = []) {
+  const summary = customerPayments.reduce(
+    (acc, payment) => {
+      const amount = Number(payment?.amount || 0);
+      const method = normalizePaymentMethod(payment?.paymentMethod);
+      if (method === "cash" || method === "") {
+        acc.cash += amount;
+      } else if (method === "banktransfer") {
+        acc.bank += amount;
+      } else {
+        acc.cash += amount;
+      }
+
+      acc.total += amount;
+      return acc;
+    },
+    { total: 0, cash: 0, bank: 0 },
+  );
+
+  return {
+    total: round(summary.total, 2),
+    cash: round(summary.cash, 2),
+    bank: round(summary.bank, 2),
+  };
+}
+
 export async function dailyReport({ from, to }) {
   const end = new Date(
-    to || new Date(new Date(from || Date.now()).getTime() + 86400000),
+    to
+      ? new Date(new Date(to).getTime() + 86400000 - 1)
+      : new Date(new Date(from || Date.now()).getTime() + 86400000 - 1),
   );
   const start = new Date(from || end.getTime() - 86400000);
   const [
@@ -50,6 +104,7 @@ export async function dailyReport({ from, to }) {
     suppliers,
     salaryPayments,
     profitShares,
+    cylinderTypes,
   ] = await Promise.all([
     Sale.find({ ...range("saleDate", start, end), status: "completed" }).lean(),
     Purchase.find({
@@ -73,18 +128,23 @@ export async function dailyReport({ from, to }) {
     Supplier.find({ status: "active" }).select("totalDue").lean(),
     SalaryPayment.find({ ...range("paymentDate", start, end) }).lean(),
     ProfitSharePayment.find({ ...range("paymentDate", start, end) }).lean(),
+    CylinderType.find({ status: "active" }).select("name capacityKg").lean(),
   ]);
+  const customerReceiptSummary = summarizeCustomerReceipts(customerPayments);
   const result = {
     totalSales: sum(sales, "totalAmount"),
     totalLpgSold: sum(sales, "totalLpgKg"),
     totalCylindersSold: sum(sales, "totalCylinderCount"),
-    totalCustomerPayments: sum(customerPayments, "amount"),
+    totalCustomerPayments: customerReceiptSummary.total,
+    receivedInCash: customerReceiptSummary.cash,
+    receivedInBank: customerReceiptSummary.bank,
     totalSupplierPayments: sum(supplierPayments, "amount"),
     totalExpenses: sum(expenses, "amount"),
     grossProfit: sum(sales, "grossProfit"),
     currentLpgStock: round(sum(batches, "remainingQuantityKg"), 3),
     totalSalaryPaid: sum(salaryPayments, "amount"),
     totalProfitSharePaid: sum(profitShares, "amount"),
+    cylinderBreakdown: cylinderBreakdown(sales, cylinderTypes),
   };
   result.operatingProfit = round(
     result.grossProfit - result.totalExpenses - result.totalSalaryPaid,
@@ -107,9 +167,8 @@ export async function monthlyReport({ from, to }) {
     suppliers,
     salaryPayments,
     profitShares,
+    cylinderTypes,
   ] = await Promise.all([
-    SalaryPayment.find({ ...range("paymentDate", from, to) }).lean(),
-    ProfitSharePayment.find({ ...range("paymentDate", from, to) }).lean(),
     Sale.find({ ...range("saleDate", from, to), status: "completed" }).lean(),
     Purchase.find({
       ...range("purchaseDate", from, to),
@@ -130,7 +189,11 @@ export async function monthlyReport({ from, to }) {
     PurchaseBatch.find({ status: { $ne: "cancelled" } }).lean(),
     Customer.find({ status: "active" }).select("totalDue").lean(),
     Supplier.find({ status: "active" }).select("totalDue").lean(),
+    SalaryPayment.find({ ...range("paymentDate", from, to) }).lean(),
+    ProfitSharePayment.find({ ...range("paymentDate", from, to) }).lean(),
+    CylinderType.find({ status: "active" }).select("name capacityKg").lean(),
   ]);
+  const customerReceiptSummary = summarizeCustomerReceipts(customerPayments);
   const result = {
     totalLpgPurchased: sum(purchases, "quantityKg"),
     totalLpgSold: sum(sales, "totalLpgKg"),
@@ -139,13 +202,16 @@ export async function monthlyReport({ from, to }) {
     totalCogs: sum(sales, "totalCost"),
     grossProfit: sum(sales, "grossProfit"),
     totalExpenses: sum(expenses, "amount"),
-    customerPayments: sum(customerPayments, "amount"),
+    customerPayments: customerReceiptSummary.total,
+    receivedInCash: customerReceiptSummary.cash,
+    receivedInBank: customerReceiptSummary.bank,
     supplierPayments: sum(supplierPayments, "amount"),
     closingLpgStock: round(sum(batches, "remainingQuantityKg"), 3),
     customerOutstanding: sum(customers, "totalDue"),
     supplierOutstanding: sum(suppliers, "totalDue"),
     totalSalaryPaid: sum(salaryPayments, "amount"),
     totalProfitSharePaid: sum(profitShares, "amount"),
+    cylinderBreakdown: cylinderBreakdown(sales, cylinderTypes),
   };
   result.operatingProfit = round(
     result.grossProfit - result.totalExpenses - result.totalSalaryPaid,
