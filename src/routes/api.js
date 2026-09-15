@@ -116,6 +116,71 @@ router.get(
     ),
   ),
 );
+router.get(
+  "/customers/:id/overview",
+  asyncHandler(async (req, res) => {
+    const customer = await Customer.findById(req.params.id).lean();
+    if (!customer) return fail(res, "Customer not found", [], 404);
+    const [sales, payments, ledger] = await Promise.all([
+      Sale.find({ customer: req.params.id, status: "completed" })
+        .populate("items.cylinderType")
+        .sort({ saleDate: -1 })
+        .lean(),
+      CustomerPayment.find({ customer: req.params.id, status: "active" })
+        .populate("sale")
+        .sort({ paymentDate: -1 })
+        .lean(),
+      customerLedger(req.params.id),
+    ]);
+    return ok(res, "Customer overview fetched", {
+      customer,
+      sales,
+      payments,
+      ledger,
+      totals: {
+        sales: round(
+          sales.reduce(
+            (total, sale) => total + Number(sale.totalAmount || 0),
+            0,
+          ),
+          2,
+        ),
+        paid: round(
+          payments.reduce(
+            (total, payment) => total + Number(payment.amount || 0),
+            0,
+          ),
+          2,
+        ),
+        due: round(Number(customer.totalDue || 0), 2),
+      },
+    });
+  }),
+);
+router.get(
+  "/dues",
+  asyncHandler(async (req, res) => {
+    const customers = await Customer.find({
+      status: "active",
+      totalDue: { $gt: 0 },
+    })
+      .sort({ totalDue: -1, name: 1 })
+      .lean();
+    const rows = await Promise.all(
+      customers.map(async (customer) => {
+        const lastPayment = await CustomerPayment.findOne({
+          customer: customer._id,
+          status: "active",
+        })
+          .sort({ paymentDate: -1 })
+          .select("paymentDate amount paymentMethod")
+          .lean();
+        return { ...customer, lastPayment };
+      }),
+    );
+    return ok(res, "Customer dues fetched", rows);
+  }),
+);
 const withResource = (resource, handler) => async (req, res, next) => {
   req.params.resource = resource;
   return handler(req, res, next);
