@@ -56,6 +56,35 @@ export async function createSale(input, user) {
         2,
       );
       const totalAmount = round(subtotal - input.discount, 2);
+      const advancePayments = await CustomerPayment.find({
+        customer: input.customer,
+        paymentType: "advance",
+        status: "active",
+        remainingAmount: { $gt: 0 },
+      })
+        .sort({ paymentDate: 1, createdAt: 1 })
+        .session(session);
+      let remainingSaleBalance = round(
+        Math.max(0, totalAmount - input.totalPaid),
+        2,
+      );
+      const advanceApplications = [];
+      for (const advance of advancePayments) {
+        if (!remainingSaleBalance) break;
+        const applied = round(
+          Math.min(Number(advance.remainingAmount || 0), remainingSaleBalance),
+          2,
+        );
+        if (applied > 0) {
+          advanceApplications.push({ advance, applied });
+          remainingSaleBalance = round(remainingSaleBalance - applied, 2);
+        }
+      }
+      const appliedAdvance = round(
+        advanceApplications.reduce((total, item) => total + item.applied, 0),
+        2,
+      );
+      const totalPaid = round(input.totalPaid + appliedAdvance, 2);
       const fifo = await allocateFifo(totalLpgKg, session);
       if (fifo.insufficient) {
         const e = new Error("Insufficient LPG inventory");
@@ -84,12 +113,12 @@ export async function createSale(input, user) {
             totalAmount,
             totalCost: fifo.totalCost,
             grossProfit: round(totalAmount - fifo.totalCost, 2),
-            totalPaid: input.totalPaid,
-            totalDue: round(totalAmount - input.totalPaid, 2),
+            totalPaid,
+            totalDue: round(totalAmount - totalPaid, 2),
             paymentStatus:
-              input.totalPaid >= totalAmount
+              totalPaid >= totalAmount
                 ? "paid"
-                : input.totalPaid
+                : totalPaid
                   ? "partial"
                   : "unpaid",
             createdBy: user._id,
@@ -121,12 +150,35 @@ export async function createSale(input, user) {
           ],
           { session, ordered: true },
         );
+      for (const { advance, applied } of advanceApplications) {
+        advance.remainingAmount = round(
+          Number(advance.remainingAmount || 0) - applied,
+          2,
+        );
+        await advance.save({ session });
+        await CustomerPayment.create(
+          [
+            {
+              paymentNumber: number("CPAY"),
+              customer: input.customer,
+              sale: sale._id,
+              amount: applied,
+              paymentDate: sale.saleDate,
+              paymentMethod: advance.paymentMethod,
+              paymentType: "advance_application",
+              createdBy: user._id,
+            },
+          ],
+          { session, ordered: true },
+        );
+      }
       await Customer.updateOne(
         { _id: input.customer },
         {
           $inc: {
-            existingReceivable: round(totalAmount - input.totalPaid, 2),
-            totalDue: round(totalAmount - input.totalPaid, 2),
+            existingReceivable: round(totalAmount - totalPaid, 2),
+            totalDue: round(totalAmount - totalPaid, 2),
+            advanceBalance: -appliedAdvance,
           },
         },
         { session },

@@ -64,6 +64,7 @@ export function summarizeCustomerReceipts(customerPayments = []) {
   const summary = customerPayments.reduce(
     (acc, payment) => {
       const amount = Number(payment?.amount || 0);
+      if (payment?.paymentType === "advance_application") return acc;
       const method = normalizePaymentMethod(payment?.paymentMethod);
       if (method === "cash" || method === "") {
         acc.cash += amount;

@@ -33,6 +33,7 @@ export async function customerLedger(customerId, query = {}) {
     CustomerPayment.find({
       customer: customerId,
       status: "active",
+      $or: [{ paymentType: "sale" }, { paymentType: { $exists: false } }],
       ...dateFilter("paymentDate", query),
     }).lean(),
   ]);

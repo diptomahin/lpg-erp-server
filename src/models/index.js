@@ -44,6 +44,7 @@ export const Customer = model(
   "Customer",
   party({
     existingReceivable: { type: Number, min: 0, default: 0 },
+    advanceBalance: { type: Number, min: 0, default: 0 },
     migrationReceivable: { type: Number, min: 0, default: 0, select: false },
     creditLimit: { type: Number, default: 0 },
   }),
@@ -189,6 +190,12 @@ const payment = (name, partyName, transactionName) =>
           ref: transactionName[0].toUpperCase() + transactionName.slice(1),
         },
         amount: { type: Number, min: 0.01 },
+        paymentType: {
+          type: String,
+          enum: ["sale", "advance", "advance_application"],
+          default: "sale",
+        },
+        remainingAmount: { type: Number, min: 0, default: 0 },
         paymentDate: { type: Date, default: Date.now, index: true },
         paymentMethod: String,
         reference: String,

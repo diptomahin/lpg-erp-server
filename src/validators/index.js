@@ -44,6 +44,7 @@ export const saleInput = z.object({
 });
 export const paymentInput = z.object({
   amount: z.number().positive(),
+  paymentType: z.enum(["sale", "advance"]).optional(),
   paymentDate: z.coerce.date().optional(),
   paymentMethod: z.string().optional(),
   reference: z.string().optional(),

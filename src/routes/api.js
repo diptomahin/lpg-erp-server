@@ -146,12 +146,16 @@ router.get(
           2,
         ),
         paid: round(
-          payments.reduce(
-            (total, payment) => total + Number(payment.amount || 0),
-            0,
-          ),
+          payments
+            .filter(
+              (payment) =>
+                payment.paymentType !== "advance" &&
+                payment.paymentType !== "advance_application",
+            )
+            .reduce((total, payment) => total + Number(payment.amount || 0), 0),
           2,
         ),
+        advance: round(Number(customer.advanceBalance || 0), 2),
         due: round(Number(customer.totalDue || 0), 2),
       },
     });
@@ -179,6 +183,32 @@ router.get(
       }),
     );
     return ok(res, "Customer dues fetched", rows);
+  }),
+);
+router.get(
+  "/advances",
+  asyncHandler(async (req, res) => {
+    const customers = await Customer.find({
+      status: "active",
+      advanceBalance: { $gt: 0 },
+    })
+      .sort({ advanceBalance: -1, name: 1 })
+      .lean();
+    const rows = await Promise.all(
+      customers.map(async (customer) => ({
+        ...customer,
+        advances: await CustomerPayment.find({
+          customer: customer._id,
+          paymentType: "advance",
+          status: "active",
+          remainingAmount: { $gt: 0 },
+        })
+          .sort({ paymentDate: -1 })
+          .select("paymentDate amount remainingAmount paymentMethod reference")
+          .lean(),
+      })),
+    );
+    return ok(res, "Customer advances fetched", rows);
   }),
 );
 const withResource = (resource, handler) => async (req, res, next) => {

@@ -27,6 +27,58 @@ export async function createPayment(kind, input, user) {
           ).session(session));
         input[partyKey] = transaction?.[partyKey];
       }
+      if (kind === "customer" && input.paymentType === "advance") {
+        if (input.sale) {
+          const e = new Error("Advance payments cannot be linked to a sale");
+          e.status = 400;
+          throw e;
+        }
+        const customer = await Customer.findById(input.customer)
+          .select("totalDue")
+          .session(session);
+        if (!customer) {
+          const e = new Error("Customer not found");
+          e.status = 404;
+          throw e;
+        }
+        if (Number(customer.totalDue || 0) > 0) {
+          const e = new Error(
+            "Customer must have no outstanding due before making an advance payment",
+          );
+          e.status = 400;
+          throw e;
+        }
+        [payment] = await Model.create(
+          [
+            {
+              ...input,
+              paymentType: "advance",
+              remainingAmount: input.amount,
+              paymentNumber: number("CPAY"),
+              createdBy: user._id,
+            },
+          ],
+          { session, ordered: true },
+        );
+        await Customer.updateOne(
+          { _id: input.customer },
+          { $inc: { advanceBalance: input.amount } },
+          { session },
+        );
+        await AuditLog.create(
+          [
+            {
+              user: user._id,
+              action: "ADVANCE_PAYMENT",
+              entityType: Model.modelName,
+              entityId: payment._id,
+              newData: payment.toObject(),
+            },
+          ],
+          { session, ordered: true },
+        );
+        return;
+      }
       if (input[transactionKey]) {
         const transaction = await Transaction.findById(
           input[transactionKey],
@@ -83,6 +135,8 @@ export async function createPayment(kind, input, user) {
         [
           {
             ...input,
+            paymentType: input.paymentType || "sale",
+            remainingAmount: 0,
             paymentNumber: number(kind === "customer" ? "CPAY" : "SPAY"),
             createdBy: user._id,
           },
