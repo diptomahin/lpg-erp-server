@@ -147,6 +147,24 @@ export const list = async (req, res) => {
       .sort({ createdAt: -1 }),
     Model.countDocuments(query),
   ]);
+  if (resource === "suppliers") {
+    const advanceRows = await SupplierPayment.aggregate([
+      {
+        $match: {
+          status: "active",
+          paymentType: "advance",
+          remainingAmount: { $gt: 0 },
+        },
+      },
+      { $group: { _id: "$supplier", amount: { $sum: "$remainingAmount" } } },
+    ]);
+    const advances = new Map(
+      advanceRows.map((row) => [String(row._id), Number(row.amount || 0)]),
+    );
+    for (const row of rows) {
+      row.advanceBalance = advances.get(String(row._id)) || 0;
+    }
+  }
   return listResponse(res, "Records fetched", rows, total, page, limit);
 };
 export const create = async (req, res) => {

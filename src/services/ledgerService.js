@@ -81,6 +81,7 @@ export async function supplierLedger(supplierId, query = {}) {
     SupplierPayment.find({
       supplier: supplierId,
       status: "active",
+      $or: [{ paymentType: "sale" }, { paymentType: { $exists: false } }],
       ...dateFilter("paymentDate", query),
     }).lean(),
   ]);

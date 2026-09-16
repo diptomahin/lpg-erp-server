@@ -125,8 +125,12 @@ export async function dailyReport({ from, to }) {
       status: "active",
     }).lean(),
     PurchaseBatch.find({ status: { $ne: "cancelled" } }).lean(),
-    Customer.find({ status: "active" }).select("totalDue").lean(),
-    Supplier.find({ status: "active" }).select("totalDue").lean(),
+    Customer.find({ status: "active" })
+      .select("totalDue advanceBalance")
+      .lean(),
+    Supplier.find({ status: "active" })
+      .select("totalDue advanceBalance")
+      .lean(),
     SalaryPayment.find({ ...range("paymentDate", start, end) }).lean(),
     ProfitSharePayment.find({ ...range("paymentDate", start, end) }).lean(),
     CylinderType.find({ status: "active" }).select("name capacityKg").lean(),
@@ -139,7 +143,12 @@ export async function dailyReport({ from, to }) {
     totalCustomerPayments: customerReceiptSummary.total,
     receivedInCash: customerReceiptSummary.cash,
     receivedInBank: customerReceiptSummary.bank,
-    totalSupplierPayments: sum(supplierPayments, "amount"),
+    totalSupplierPayments: sum(
+      supplierPayments.filter(
+        (payment) => payment.paymentType !== "advance_application",
+      ),
+      "amount",
+    ),
     totalExpenses: sum(expenses, "amount"),
     grossProfit: sum(sales, "grossProfit"),
     currentLpgStock: round(sum(batches, "remainingQuantityKg"), 3),
@@ -152,7 +161,9 @@ export async function dailyReport({ from, to }) {
     2,
   );
   result.customerDue = round(sum(customers, "totalDue"), 2);
+  result.totalCustomerAdvances = round(sum(customers, "advanceBalance"), 2);
   result.supplierPayable = round(sum(suppliers, "totalDue"), 2);
+  result.totalSupplierAdvances = round(sum(suppliers, "advanceBalance"), 2);
   return result;
 }
 
@@ -188,8 +199,12 @@ export async function monthlyReport({ from, to }) {
       status: "active",
     }).lean(),
     PurchaseBatch.find({ status: { $ne: "cancelled" } }).lean(),
-    Customer.find({ status: "active" }).select("totalDue").lean(),
-    Supplier.find({ status: "active" }).select("totalDue").lean(),
+    Customer.find({ status: "active" })
+      .select("totalDue advanceBalance")
+      .lean(),
+    Supplier.find({ status: "active" })
+      .select("totalDue advanceBalance")
+      .lean(),
     SalaryPayment.find({ ...range("paymentDate", from, to) }).lean(),
     ProfitSharePayment.find({ ...range("paymentDate", from, to) }).lean(),
     CylinderType.find({ status: "active" }).select("name capacityKg").lean(),
@@ -206,7 +221,12 @@ export async function monthlyReport({ from, to }) {
     customerPayments: customerReceiptSummary.total,
     receivedInCash: customerReceiptSummary.cash,
     receivedInBank: customerReceiptSummary.bank,
-    supplierPayments: sum(supplierPayments, "amount"),
+    supplierPayments: sum(
+      supplierPayments.filter(
+        (payment) => payment.paymentType !== "advance_application",
+      ),
+      "amount",
+    ),
     closingLpgStock: round(sum(batches, "remainingQuantityKg"), 3),
     customerOutstanding: sum(customers, "totalDue"),
     supplierOutstanding: sum(suppliers, "totalDue"),
@@ -218,6 +238,8 @@ export async function monthlyReport({ from, to }) {
     result.grossProfit - result.totalExpenses - result.totalSalaryPaid,
     2,
   );
+  result.totalCustomerAdvances = round(sum(customers, "advanceBalance"), 2);
+  result.totalSupplierAdvances = round(sum(suppliers, "advanceBalance"), 2);
   return result;
 }
 

@@ -27,23 +27,35 @@ export async function createPayment(kind, input, user) {
           ).session(session));
         input[partyKey] = transaction?.[partyKey];
       }
-      if (kind === "customer" && input.paymentType === "advance") {
+      if (input.paymentType === "advance") {
         if (input.sale) {
-          const e = new Error("Advance payments cannot be linked to a sale");
+          const e = new Error(
+            "Advance payments cannot be linked to a transaction",
+          );
           e.status = 400;
           throw e;
         }
-        const customer = await Customer.findById(input.customer)
+        if (input.purchase) {
+          const e = new Error(
+            "Advance payments cannot be linked to a transaction",
+          );
+          e.status = 400;
+          throw e;
+        }
+        const Party = kind === "customer" ? Customer : Supplier;
+        const party = await Party.findById(input[partyKey])
           .select("totalDue")
           .session(session);
-        if (!customer) {
-          const e = new Error("Customer not found");
+        if (!party) {
+          const e = new Error(
+            `${kind === "customer" ? "Customer" : "Supplier"} not found`,
+          );
           e.status = 404;
           throw e;
         }
-        if (Number(customer.totalDue || 0) > 0) {
+        if (Number(party.totalDue || 0) > 0) {
           const e = new Error(
-            "Customer must have no outstanding due before making an advance payment",
+            `${kind === "customer" ? "Customer" : "Supplier"} must have no outstanding balance before making an advance payment`,
           );
           e.status = 400;
           throw e;
@@ -54,14 +66,14 @@ export async function createPayment(kind, input, user) {
               ...input,
               paymentType: "advance",
               remainingAmount: input.amount,
-              paymentNumber: number("CPAY"),
+              paymentNumber: number(kind === "customer" ? "CPAY" : "SPAY"),
               createdBy: user._id,
             },
           ],
           { session, ordered: true },
         );
-        await Customer.updateOne(
-          { _id: input.customer },
+        await Party.updateOne(
+          { _id: input[partyKey] },
           { $inc: { advanceBalance: input.amount } },
           { session },
         );

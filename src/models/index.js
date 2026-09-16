@@ -53,6 +53,7 @@ export const Supplier = model(
   "Supplier",
   party({
     existingPayable: { type: Number, min: 0, default: 0 },
+    advanceBalance: { type: Number, min: 0, default: 0 },
     migrationPayable: { type: Number, min: 0, default: 0, select: false },
   }),
 );

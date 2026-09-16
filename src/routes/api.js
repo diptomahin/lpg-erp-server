@@ -117,6 +117,46 @@ router.get(
   ),
 );
 router.get(
+  "/suppliers/:id/overview",
+  asyncHandler(async (req, res) => {
+    const supplier = await Supplier.findById(req.params.id).lean();
+    if (!supplier) return fail(res, "Supplier not found", [], 404);
+    const [purchases, payments, ledger] = await Promise.all([
+      Purchase.find({ supplier: req.params.id, status: "completed" })
+        .sort({ purchaseDate: -1 })
+        .lean(),
+      SupplierPayment.find({ supplier: req.params.id, status: "active" })
+        .populate("purchase")
+        .sort({ paymentDate: -1 })
+        .lean(),
+      supplierLedger(req.params.id),
+    ]);
+    return ok(res, "Supplier overview fetched", {
+      supplier,
+      purchases,
+      payments,
+      ledger,
+      totals: {
+        purchases: round(
+          purchases.reduce(
+            (total, purchase) => total + Number(purchase.totalCost || 0),
+            0,
+          ),
+          2,
+        ),
+        paid: round(
+          payments
+            .filter((payment) => payment.paymentType !== "advance_application")
+            .reduce((total, payment) => total + Number(payment.amount || 0), 0),
+          2,
+        ),
+        advance: round(Number(supplier.advanceBalance || 0), 2),
+        payable: round(Number(supplier.totalDue || 0), 2),
+      },
+    });
+  }),
+);
+router.get(
   "/customers/:id/overview",
   asyncHandler(async (req, res) => {
     const customer = await Customer.findById(req.params.id).lean();
@@ -147,11 +187,7 @@ router.get(
         ),
         paid: round(
           payments
-            .filter(
-              (payment) =>
-                payment.paymentType !== "advance" &&
-                payment.paymentType !== "advance_application",
-            )
+            .filter((payment) => payment.paymentType !== "advance_application")
             .reduce((total, payment) => total + Number(payment.amount || 0), 0),
           2,
         ),
@@ -209,6 +245,43 @@ router.get(
       })),
     );
     return ok(res, "Customer advances fetched", rows);
+  }),
+);
+router.get(
+  "/supplier-advances",
+  asyncHandler(async (req, res) => {
+    const suppliers = await Supplier.find({
+      status: "active",
+      advanceBalance: { $gt: 0 },
+    })
+      .sort({ advanceBalance: -1, name: 1 })
+      .lean();
+    const rows = await Promise.all(
+      suppliers.map(async (supplier) => ({
+        ...supplier,
+        advanceBalance: await SupplierPayment.aggregate([
+          {
+            $match: {
+              supplier: supplier._id,
+              status: "active",
+              paymentType: "advance",
+              remainingAmount: { $gt: 0 },
+            },
+          },
+          { $group: { _id: null, amount: { $sum: "$remainingAmount" } } },
+        ]).then((result) => Number(result[0]?.amount || 0)),
+        advances: await SupplierPayment.find({
+          supplier: supplier._id,
+          paymentType: "advance",
+          status: "active",
+          remainingAmount: { $gt: 0 },
+        })
+          .sort({ paymentDate: -1 })
+          .select("paymentDate amount remainingAmount paymentMethod reference")
+          .lean(),
+      })),
+    );
+    return ok(res, "Supplier advances fetched", rows);
   }),
 );
 const withResource = (resource, handler) => async (req, res, next) => {

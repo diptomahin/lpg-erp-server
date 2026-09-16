@@ -28,6 +28,41 @@ export async function createPurchase(input, user) {
       const ratePerTon = round(ratePerKg * 1000, 2);
       const subtotal = round(quantityKg * ratePerKg, 2);
       const totalCost = round(subtotal + input.additionalCost, 2);
+      const advancePayments = await SupplierPayment.find({
+        supplier: input.supplier,
+        paymentType: "advance",
+        status: "active",
+        remainingAmount: { $gt: 0 },
+      })
+        .sort({ paymentDate: 1, createdAt: 1 })
+        .session(session);
+      let remainingPurchaseBalance = round(
+        Math.max(0, totalCost - input.totalPaid),
+        2,
+      );
+      const advanceApplications = [];
+      for (const advance of advancePayments) {
+        if (!remainingPurchaseBalance) break;
+        const applied = round(
+          Math.min(
+            Number(advance.remainingAmount || 0),
+            remainingPurchaseBalance,
+          ),
+          2,
+        );
+        if (applied > 0) {
+          advanceApplications.push({ advance, applied });
+          remainingPurchaseBalance = round(
+            remainingPurchaseBalance - applied,
+            2,
+          );
+        }
+      }
+      const appliedAdvance = round(
+        advanceApplications.reduce((total, item) => total + item.applied, 0),
+        2,
+      );
+      const totalPaid = round(input.totalPaid + appliedAdvance, 2);
       const [purchase] = await Purchase.create(
         [
           {
@@ -41,12 +76,12 @@ export async function createPurchase(input, user) {
             subtotal,
             additionalCost: input.additionalCost,
             totalCost,
-            totalPaid: input.totalPaid,
-            totalDue: round(totalCost - input.totalPaid, 2),
+            totalPaid,
+            totalDue: round(totalCost - totalPaid, 2),
             paymentStatus:
-              input.totalPaid >= totalCost
+              totalPaid >= totalCost
                 ? "paid"
-                : input.totalPaid
+                : totalPaid
                   ? "partial"
                   : "unpaid",
             notes: input.notes,
@@ -79,18 +114,55 @@ export async function createPurchase(input, user) {
               supplier: input.supplier,
               purchase: purchase._id,
               amount: input.totalPaid,
+              paymentType: "sale",
               paymentDate: purchase.purchaseDate,
               createdBy: user._id,
             },
           ],
           { session, ordered: true },
         );
+      for (const { advance, applied } of advanceApplications) {
+        advance.remainingAmount = round(
+          Number(advance.remainingAmount || 0) - applied,
+          2,
+        );
+        await advance.save({ session });
+        await SupplierPayment.create(
+          [
+            {
+              paymentNumber: number("SPAY"),
+              supplier: input.supplier,
+              purchase: purchase._id,
+              amount: applied,
+              paymentDate: purchase.purchaseDate,
+              paymentMethod: advance.paymentMethod,
+              paymentType: "advance_application",
+              createdBy: user._id,
+            },
+          ],
+          { session, ordered: true },
+        );
+      }
+      const remainingAdvanceRows = await SupplierPayment.aggregate([
+        {
+          $match: {
+            supplier: input.supplier,
+            paymentType: "advance",
+            status: "active",
+            remainingAmount: { $gt: 0 },
+          },
+        },
+        { $group: { _id: null, amount: { $sum: "$remainingAmount" } } },
+      ]).session(session);
       await Supplier.updateOne(
         { _id: input.supplier },
         {
           $inc: {
-            existingPayable: round(totalCost - input.totalPaid, 2),
-            totalDue: round(totalCost - input.totalPaid, 2),
+            existingPayable: round(totalCost - totalPaid, 2),
+            totalDue: round(totalCost - totalPaid, 2),
+          },
+          $set: {
+            advanceBalance: Number(remainingAdvanceRows[0]?.amount || 0),
           },
         },
         { session },
