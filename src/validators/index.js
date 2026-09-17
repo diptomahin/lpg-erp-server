@@ -40,6 +40,7 @@ export const saleInput = z.object({
     .min(1),
   discount: z.number().nonnegative().default(0),
   totalPaid: z.number().nonnegative().default(0),
+  paymentMethod: z.string().optional().default("cash"),
   saleDate: z.coerce.date().optional(),
 });
 export const paymentInput = z.object({

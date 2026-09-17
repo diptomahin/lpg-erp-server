@@ -145,6 +145,8 @@ export async function createSale(input, user) {
               sale: sale._id,
               amount: input.totalPaid,
               paymentDate: sale.saleDate,
+              paymentMethod: input.paymentMethod || "cash",
+              paymentType: "sale",
               createdBy: user._id,
             },
           ],
