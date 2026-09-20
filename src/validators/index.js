@@ -6,7 +6,6 @@ export const purchaseInput = z
     quantityTon: z.number().positive().optional(),
     quantityKg: z.number().positive().optional(),
     purchaseRatePerKg: z.number().positive(),
-    additionalCost: z.number().nonnegative().default(0),
     purchaseDate: z.coerce.date().optional(),
     totalPaid: z.number().nonnegative().default(0),
     notes: z.string().optional(),
@@ -27,6 +26,9 @@ export const purchaseInput = z
       });
     }
   });
+export const purchaseQuantityConfirmationInput = z.object({
+  actualQuantityKg: z.number().positive(),
+});
 export const saleInput = z.object({
   customer: id,
   items: z

@@ -20,10 +20,18 @@ import {
 } from "../models/index.js";
 import { ok, fail, paginate, listResponse } from "../utils/api.js";
 import { changePassword, login } from "../services/authService.js";
-import { createPurchase } from "../services/purchaseService.js";
+import {
+  confirmPurchaseQuantity,
+  createPurchase,
+} from "../services/purchaseService.js";
 import { createSale, voidSale } from "../services/saleService.js";
 import { createPayment } from "../services/paymentService.js";
-import { purchaseInput, saleInput, paymentInput } from "../validators/index.js";
+import {
+  purchaseInput,
+  purchaseQuantityConfirmationInput,
+  saleInput,
+  paymentInput,
+} from "../validators/index.js";
 const recordNumber = (prefix) =>
   `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 export const modelMap = {
@@ -228,6 +236,16 @@ export const createPurchaseController = async (req, res) =>
     "Purchase created successfully",
     await createPurchase(purchaseInput.parse(req.body), req.user),
     201,
+  );
+export const confirmPurchaseQuantityController = async (req, res) =>
+  ok(
+    res,
+    "Purchase quantity confirmed successfully",
+    await confirmPurchaseQuantity(
+      req.params.id,
+      purchaseQuantityConfirmationInput.parse(req.body).actualQuantityKg,
+      req.user,
+    ),
   );
 export const createSaleController = async (req, res) =>
   ok(

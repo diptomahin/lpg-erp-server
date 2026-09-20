@@ -6,6 +6,7 @@ import {
   AuditLog,
   Supplier,
   SupplierPayment,
+  SaleBatchAllocation,
 } from "../models/index.js";
 import { tonToKg, round } from "../utils/numbers.js";
 const number = (prefix) =>
@@ -27,7 +28,7 @@ export async function createPurchase(input, user) {
       const ratePerKg = input.purchaseRatePerKg;
       const ratePerTon = round(ratePerKg * 1000, 2);
       const subtotal = round(quantityKg * ratePerKg, 2);
-      const totalCost = round(subtotal + input.additionalCost, 2);
+      const totalCost = subtotal;
       const advancePayments = await SupplierPayment.find({
         supplier: input.supplier,
         paymentType: "advance",
@@ -74,7 +75,8 @@ export async function createPurchase(input, user) {
             purchaseRatePerTon: ratePerTon,
             purchaseRatePerKg: ratePerKg,
             subtotal,
-            additionalCost: input.additionalCost,
+            estimatedQuantityKg: quantityKg,
+            quantityStatus: "estimated",
             totalCost,
             totalPaid,
             totalDue: round(totalCost - totalPaid, 2),
@@ -99,9 +101,10 @@ export async function createPurchase(input, user) {
             batchDate: purchase.purchaseDate,
             originalQuantityKg: quantityKg,
             remainingQuantityKg: quantityKg,
+            estimatedQuantityKg: quantityKg,
+            quantityStatus: "estimated",
             purchaseCostPerKg: ratePerKg,
-            additionalCost: input.additionalCost,
-            acquisitionCostPerKg: round(totalCost / quantityKg, 4),
+            acquisitionCostPerKg: ratePerKg,
           },
         ],
         { session, ordered: true },
@@ -194,6 +197,128 @@ export async function createPurchase(input, user) {
             action: "CREATE",
             entityType: "Purchase",
             entityId: purchase._id,
+            newData: purchase.toObject(),
+          },
+        ],
+        { session, ordered: true },
+      );
+      result = purchase;
+    });
+    return result;
+  } finally {
+    await session.endSession();
+  }
+}
+
+export async function confirmPurchaseQuantity(id, actualQuantityKg, user) {
+  const session = await mongoose.startSession();
+  try {
+    let result;
+    await session.withTransaction(async () => {
+      const purchase = await Purchase.findOne({
+        _id: id,
+        status: "completed",
+      }).session(session);
+      if (!purchase) {
+        const error = new Error("Completed purchase not found");
+        error.status = 404;
+        throw error;
+      }
+      const batch = await PurchaseBatch.findOne({ purchase: id }).session(
+        session,
+      );
+      if (!batch || batch.status === "cancelled") {
+        const error = new Error("Purchase batch not found");
+        error.status = 404;
+        throw error;
+      }
+      const sold = await SaleBatchAllocation.aggregate([
+        { $match: { batch: batch._id } },
+        { $group: { _id: null, quantityKg: { $sum: "$quantityKg" } } },
+      ]).session(session);
+      const soldQuantityKg = round(Number(sold[0]?.quantityKg || 0), 3);
+      if (actualQuantityKg < soldQuantityKg) {
+        const error = new Error(
+          `Actual quantity cannot be below sold quantity (${soldQuantityKg} KG)`,
+        );
+        error.status = 409;
+        throw error;
+      }
+
+      const oldQuantityKg = Number(
+        purchase.quantityKg || batch.originalQuantityKg || 0,
+      );
+      const oldTotalCost = Number(purchase.totalCost || 0);
+      const newTotalCost = round(
+        actualQuantityKg * Number(purchase.purchaseRatePerKg || 0),
+        2,
+      );
+      const oldTotalDue = Number(purchase.totalDue || 0);
+      const newTotalDue = round(
+        Math.max(0, newTotalCost - Number(purchase.totalPaid || 0)),
+        2,
+      );
+      purchase.quantityKg = actualQuantityKg;
+      purchase.quantityTon = round(actualQuantityKg / 1000, 3);
+      purchase.actualQuantityKg = actualQuantityKg;
+      purchase.quantityStatus = "confirmed";
+      purchase.subtotal = newTotalCost;
+      purchase.totalCost = newTotalCost;
+      purchase.totalDue = newTotalDue;
+      purchase.paymentStatus = newTotalDue === 0 ? "paid" : "partial";
+      await purchase.save({ session });
+
+      batch.actualQuantityKg = actualQuantityKg;
+      batch.quantityStatus = "confirmed";
+      batch.originalQuantityKg = actualQuantityKg;
+      batch.remainingQuantityKg = round(actualQuantityKg - soldQuantityKg, 3);
+      batch.status = batch.remainingQuantityKg ? "available" : "exhausted";
+      batch.acquisitionCostPerKg = Number(purchase.purchaseRatePerKg || 0);
+      await batch.save({ session });
+
+      const payableDelta = round(newTotalDue - oldTotalDue, 2);
+      if (payableDelta) {
+        await Supplier.updateOne(
+          { _id: purchase.supplier },
+          {
+            $inc: {
+              existingPayable: payableDelta,
+              totalDue: payableDelta,
+            },
+          },
+          { session },
+        );
+      }
+      const stockDelta = round(actualQuantityKg - oldQuantityKg, 3);
+      if (stockDelta) {
+        await StockMovement.create(
+          [
+            {
+              movementNumber: number("MOV"),
+              type: "CORRECTION",
+              quantityKg: stockDelta,
+              batch: batch._id,
+              referenceType: "Purchase",
+              referenceId: purchase._id,
+              date: new Date(),
+              notes: "Purchase quantity confirmed",
+              createdBy: user._id,
+            },
+          ],
+          { session, ordered: true },
+        );
+      }
+      await AuditLog.create(
+        [
+          {
+            user: user._id,
+            action: "UPDATE",
+            entityType: "Purchase",
+            entityId: purchase._id,
+            oldData: {
+              quantityKg: oldQuantityKg,
+              totalCost: oldTotalCost,
+            },
             newData: purchase.toObject(),
           },
         ],

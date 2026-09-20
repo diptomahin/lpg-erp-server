@@ -32,6 +32,7 @@ import {
   update,
   remove,
   createPurchaseController,
+  confirmPurchaseQuantityController,
   createSaleController,
   voidSaleController,
   payment,
@@ -322,6 +323,11 @@ router.post(
   "/purchases",
   authorize("admin", "staff"),
   asyncHandler(createPurchaseController),
+);
+router.patch(
+  "/purchases/:id/quantity",
+  authorize("admin"),
+  asyncHandler(confirmPurchaseQuantityController),
 );
 router.get(
   "/purchases/:id",

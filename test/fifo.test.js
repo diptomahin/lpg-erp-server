@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { tonToKg, round } from "../src/utils/numbers.js";
 import { calculateFifoAllocations } from "../src/services/fifoService.js";
-import { purchaseInput } from "../src/validators/index.js";
+import {
+  purchaseInput,
+  purchaseQuantityConfirmationInput,
+} from "../src/validators/index.js";
 test("converts ton to normalized kg", () => assert.equal(tonToKg(10), 10000));
 test("accepts irregular purchase quantities in kg", () => {
   const result = purchaseInput.parse({
@@ -30,6 +33,25 @@ test("requires purchase price per kg", () =>
       purchaseRatePerTon: 84500,
     }),
   ));
+test("does not include additional purchase costs", () => {
+  const result = purchaseInput.parse({
+    supplier: "507f1f77bcf86cd799439011",
+    quantityKg: 7689,
+    purchaseRatePerKg: 84.5,
+    additionalCost: 5000,
+  });
+  assert.equal(result.additionalCost, undefined);
+});
+test("validates actual purchase quantity confirmation", () => {
+  assert.equal(
+    purchaseQuantityConfirmationInput.parse({ actualQuantityKg: 7850 })
+      .actualQuantityKg,
+    7850,
+  );
+  assert.throws(() =>
+    purchaseQuantityConfirmationInput.parse({ actualQuantityKg: 0 }),
+  );
+});
 test("calculates cylinder quantities without floating drift", () =>
   assert.equal(round(5 * 12 + 2 * 30 + 1 * 45, 3), 165));
 test("supports decimal kg values", () =>
